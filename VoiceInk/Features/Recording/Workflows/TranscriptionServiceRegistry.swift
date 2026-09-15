@@ -17,6 +17,7 @@ class TranscriptionServiceRegistry {
     private(set) lazy var cloudTranscriptionService = CloudTranscriptionService(modelContext: modelContext)
     private(set) lazy var nativeAppleTranscriptionService = NativeAppleTranscriptionService()
     private(set) lazy var fluidAudioTranscriptionService = FluidAudioTranscriptionService()
+    private(set) lazy var qwen3ASRTranscriptionService = Qwen3ASRTranscriptionService()
     private var cachedTranscribeCppTranscriptionService: TranscribeCppTranscriptionService?
 
     var transcribeCppTranscriptionService: TranscribeCppTranscriptionService {
@@ -42,6 +43,8 @@ class TranscriptionServiceRegistry {
             return fluidAudioTranscriptionService
         case .transcribeCpp:
             return transcribeCppTranscriptionService
+        case .qwen3ASR:
+            return qwen3ASRTranscriptionService
         case .nativeApple:
             return nativeAppleTranscriptionService
         default:
@@ -85,6 +88,7 @@ class TranscriptionServiceRegistry {
 
     func cleanup() async {
         await fluidAudioTranscriptionService.cleanup()
+        await qwen3ASRTranscriptionService.cleanup()
         cachedTranscribeCppTranscriptionService?.cleanup()
     }
 }

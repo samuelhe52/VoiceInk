@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A63D21F230A5000000000001 /* MLXAudioSTT in Frameworks */ = {isa = PBXBuildFile; productRef = A63D21F130A5000000000001 /* MLXAudioSTT */; };
+		A63D21F430A5000000000001 /* MLXAudioCore in Frameworks */ = {isa = PBXBuildFile; productRef = A63D21F330A5000000000001 /* MLXAudioCore */; };
+		A63D21F730A5000000000001 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = A63D21F630A5000000000001 /* MLX */; };
+		A63D21F830A5000000000001 /* HuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = E1F900132FA6000000000001 /* HuggingFace */; };
 		E1342C1F2EB4844800CED8A2 /* Atomics in Frameworks */ = {isa = PBXBuildFile; productRef = E1342C1E2EB4844800CED8A2 /* Atomics */; };
 		E13461ED2FD1CCCD005B6A81 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = E13461EC2FD1CCCD005B6A81 /* MarkdownUI */; };
 		E161D4A12F41ECB90086F83D /* CloudKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E161D4A02F41ECB90086F83D /* CloudKit.framework */; };
@@ -143,6 +147,10 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A63D21F230A5000000000001 /* MLXAudioSTT in Frameworks */,
+				A63D21F430A5000000000001 /* MLXAudioCore in Frameworks */,
+				A63D21F730A5000000000001 /* MLX in Frameworks */,
+				A63D21F830A5000000000001 /* HuggingFace in Frameworks */,
 				E1342C1F2EB4844800CED8A2 /* Atomics in Frameworks */,
 				E1F350112F1D10D600790A2C /* whisper.xcframework in Frameworks */,
 				E1D7EF992E35E16C00640029 /* MediaRemoteAdapter in Frameworks */,
@@ -260,6 +268,10 @@
 			);
 			name = VoiceInk;
 			packageProductDependencies = (
+				A63D21F130A5000000000001 /* MLXAudioSTT */,
+				A63D21F330A5000000000001 /* MLXAudioCore */,
+				A63D21F630A5000000000001 /* MLX */,
+				E1F900132FA6000000000001 /* HuggingFace */,
 				E1ADD45E2CC544F100303ECB /* Sparkle */,
 				E1D7EF982E35E16C00640029 /* MediaRemoteAdapter */,
 				E1342C1E2EB4844800CED8A2 /* Atomics */,
@@ -385,6 +397,8 @@
 			mainGroup = E11473A72CBE0F0A00318EE4;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				A63D21F030A5000000000001 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */,
+				A63D21F530A5000000000001 /* XCRemoteSwiftPackageReference "mlx-swift" */,
 				E1ADD45D2CC544F100303ECB /* XCRemoteSwiftPackageReference "Sparkle" */,
 				E1D7EF972E35E16C00640029 /* XCRemoteSwiftPackageReference "mediaremote-adapter" */,
 				E1ECEC142E44590200DFFBA8 /* XCRemoteSwiftPackageReference "Zip" */,
@@ -866,6 +880,22 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		A63D21F030A5000000000001 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/Blaizzy/mlx-audio-swift.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.1.3;
+			};
+		};
+		A63D21F530A5000000000001 /* XCRemoteSwiftPackageReference "mlx-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.31.6;
+			};
+		};
 		E1342C1D2EB4844800CED8A2 /* XCRemoteSwiftPackageReference "swift-atomics" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/apple/swift-atomics.git";
@@ -943,7 +973,7 @@
 			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm.git";
 			requirement = {
 				kind = revision;
-				revision = cd1ab3dd98ceb02d095490aa25e61298ea3e2f5b;
+				revision = 14414441fa44f45eee35a61e9fa0bab577cf9734;
 			};
 			traits = (
 			);
@@ -967,6 +997,21 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		A63D21F130A5000000000001 /* MLXAudioSTT */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A63D21F030A5000000000001 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */;
+			productName = MLXAudioSTT;
+		};
+		A63D21F330A5000000000001 /* MLXAudioCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A63D21F030A5000000000001 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */;
+			productName = MLXAudioCore;
+		};
+		A63D21F630A5000000000001 /* MLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A63D21F530A5000000000001 /* XCRemoteSwiftPackageReference "mlx-swift" */;
+			productName = MLX;
+		};
 		E1342C1E2EB4844800CED8A2 /* Atomics */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = E1342C1D2EB4844800CED8A2 /* XCRemoteSwiftPackageReference "swift-atomics" */;

@@ -45,6 +45,10 @@ struct ModelCardView: View {
                 if let transcribeCppModel = model as? TranscribeCppModel {
                     TranscribeCppModelCardView(model: transcribeCppModel)
                 }
+            case .qwen3ASR:
+                if let qwen3ASRModel = model as? Qwen3ASRModel {
+                    Qwen3ASRModelCardView(model: qwen3ASRModel)
+                }
             case .nativeApple:
                 if let nativeAppleModel = model as? NativeAppleModel {
                     NativeAppleModelCardView(

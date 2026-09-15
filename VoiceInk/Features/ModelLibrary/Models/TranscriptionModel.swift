@@ -5,6 +5,7 @@ enum ModelProvider: String, Codable, Hashable, CaseIterable {
     case whisper = "Whisper"
     case fluidAudio = "Parakeet"
     case transcribeCpp = "TranscribeCpp"
+    case qwen3ASR = "Qwen3-ASR"
     case groq = "Groq"
     case elevenLabs = "ElevenLabs"
     case deepgram = "Deepgram"
@@ -124,6 +125,21 @@ struct TranscribeCppModel: TranscriptionModel, Sendable {
     let supportedLanguages: [String: String]
 
     var isMultilingualModel: Bool { supportedLanguages.count > 1 }
+}
+
+/// An MLX-accelerated Qwen3-ASR model that runs locally on Apple Silicon.
+struct Qwen3ASRModel: TranscriptionModel, Sendable {
+    let id = UUID()
+    let name: String
+    let displayName: String
+    let description: String
+    let provider: ModelProvider = .qwen3ASR
+    let size: String
+    let quantization: String
+    let supportedLanguages: [String: String]
+
+    var isMultilingualModel: Bool { true }
+    let supportsStreaming = false
 }
 
 // A new struct for cloud models

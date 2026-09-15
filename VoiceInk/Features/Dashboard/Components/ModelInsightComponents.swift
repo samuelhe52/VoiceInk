@@ -440,6 +440,10 @@ private struct ModelProviderIdentity {
             displayName = "On-Device"
             providerKey = "On-Device"
             fallbackSystemImage = "waveform.badge.magnifyingglass"
+        case .qwen3ASR:
+            displayName = "Qwen3-ASR"
+            providerKey = "Qwen3-ASR"
+            fallbackSystemImage = "waveform.badge.sparkles"
         case .nativeApple:
             displayName = "Apple Speech"
             providerKey = "Native Apple"

@@ -129,6 +129,8 @@ actor VoiceInkRefineInferenceEngine {
                         break
                     case .toolCall:
                         break
+                    case .rejectedToolCall:
+                        break
                     }
                 }
                 await session.clear()

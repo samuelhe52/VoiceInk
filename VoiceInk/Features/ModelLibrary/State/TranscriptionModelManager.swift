@@ -10,6 +10,7 @@ class TranscriptionModelManager: ObservableObject {
     private weak var whisperModelManager: WhisperModelManager?
     private weak var fluidAudioModelManager: FluidAudioModelManager?
     private let transcribeCppModelManager = TranscribeCppModelManager.shared
+    private let qwen3ASRModelManager = Qwen3ASRModelManager.shared
 
     private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "TranscriptionModelManager")
 
@@ -27,6 +28,9 @@ class TranscriptionModelManager: ObservableObject {
         transcribeCppModelManager.onModelDeleted = { [weak self] modelName in
             self?.handleModelDeleted(modelName)
         }
+        qwen3ASRModelManager.onModelDeleted = { [weak self] modelName in
+            self?.handleModelDeleted(modelName)
+        }
 
         // Wire up "models changed" callbacks so this manager rebuilds allAvailableModels.
         whisperModelManager.onModelsChanged = { [weak self] in
@@ -36,6 +40,9 @@ class TranscriptionModelManager: ObservableObject {
             self?.refreshAllAvailableModels()
         }
         transcribeCppModelManager.onModelsChanged = { [weak self] in
+            self?.refreshAllAvailableModels()
+        }
+        qwen3ASRModelManager.onModelsChanged = { [weak self] in
             self?.refreshAllAvailableModels()
         }
     }
@@ -51,6 +58,8 @@ class TranscriptionModelManager: ObservableObject {
                 return fluidAudioModelManager?.isFluidAudioModelDownloaded(named: model.name) ?? false
             case .transcribeCpp:
                 return transcribeCppModelManager.isModelDownloaded(named: model.name)
+            case .qwen3ASR:
+                return qwen3ASRModelManager.isModelDownloaded(named: model.name)
             case .nativeApple:
                 if #available(macOS 26, *) { return true } else { return false }
             case .custom:
@@ -68,6 +77,8 @@ class TranscriptionModelManager: ObservableObject {
         switch model.provider {
         case .nativeApple:
             if #available(macOS 26, *) { return true } else { return false }
+        case .qwen3ASR:
+            return SystemArchitecture.isAppleSilicon
         default:
             return true
         }
@@ -94,8 +105,11 @@ class TranscriptionModelManager: ObservableObject {
 
     func setDefaultTranscriptionModel(_ model: any TranscriptionModel) {
         guard isAvailableOnCurrentOS(model) else {
+            let requirement = model.provider == .qwen3ASR
+                ? String(localized: "Apple Silicon")
+                : String(localized: "macOS 26 or later")
             NotificationManager.shared.showNotification(
-                title: String(format: String(localized: "%@ requires macOS 26 or later"), model.displayName),
+                title: String(format: String(localized: "%@ requires %@"), model.displayName, requirement),
                 type: .error
             )
             return

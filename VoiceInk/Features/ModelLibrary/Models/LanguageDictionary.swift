@@ -77,6 +77,9 @@ enum LanguageDictionary {
             filtered["auto"] = "Auto-detect"
             return filtered
 
+        case .qwen3ASR:
+            return qwen3ASR
+
         default:
             return all
         }
@@ -136,6 +139,15 @@ enum LanguageDictionary {
 
     static let senseVoiceSmall = forCodes(
         ["en", "ja", "ko", "yue", "zh"],
+        includesAutoDetect: true
+    )
+
+    static let qwen3ASR = forCodes(
+        [
+            "ar", "cs", "da", "de", "el", "en", "es", "fa", "fi", "fil",
+            "fr", "hi", "hu", "id", "it", "ja", "ko", "mk", "ms", "nl",
+            "pl", "pt", "ro", "ru", "sv", "th", "tr", "vi", "yue", "zh",
+        ],
         includesAutoDetect: true
     )
 

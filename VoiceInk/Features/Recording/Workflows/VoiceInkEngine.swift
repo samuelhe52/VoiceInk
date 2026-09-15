@@ -389,6 +389,9 @@ class VoiceInkEngine: NSObject, ObservableObject {
                                 } else if let transcribeCppModel = currentModel as? TranscribeCppModel {
                                     try? await self.serviceRegistry.transcribeCppTranscriptionService.loadModel(
                                         for: transcribeCppModel)
+                                } else if let qwen3ASRModel = currentModel as? Qwen3ASRModel {
+                                    try? await self.serviceRegistry.qwen3ASRTranscriptionService.loadModel(
+                                        for: qwen3ASRModel)
                                 }
 
                             }
