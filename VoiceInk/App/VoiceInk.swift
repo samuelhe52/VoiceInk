@@ -244,7 +244,7 @@ struct VoiceInkApp: App {
             let dictionaryCloudKit: ModelConfiguration.CloudKitDatabase = .none
         #else
             let dictionaryCloudKit: ModelConfiguration.CloudKitDatabase = .private(
-                "iCloud.com.prakashjoshipax.VoiceInk")
+                "iCloud.com.samuelhe52.VoiceInk")
         #endif
         let dictionaryConfig = ModelConfiguration(
             "dictionary",

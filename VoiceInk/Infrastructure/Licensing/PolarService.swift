@@ -51,46 +51,12 @@ final class PolarService: PolarServicing {
         let status: String
     }
 
-    // Check if a license key requires activation
+    // License validation is intentionally bypassed for this developer build.
     func checkLicenseRequiresActivation(_ key: String) async throws -> (
         isValid: Bool, requiresActivation: Bool, activationsLimit: Int?
     ) {
-        var request = createRequest(endpoint: "/v1/customer-portal/license-keys/validate")
-
-        let body: [String: Any] = [
-            "key": key,
-            "organization_id": organizationId,
-        ]
-
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, httpResponse) = try await URLSession.shared.data(for: request)
-
-        if let httpResponse = httpResponse as? HTTPURLResponse {
-            if !(200...299).contains(httpResponse.statusCode) {
-                let errorMsg = String(data: data, encoding: .utf8) ?? "Unknown error"
-                logger.error(
-                    "🔑 License validation failed [HTTP \(httpResponse.statusCode)]: \(errorMsg, privacy: .private)")
-                switch httpResponse.statusCode {
-                case 404: throw LicenseError.keyNotFound
-                default: throw LicenseError.serverError(httpResponse.statusCode)
-                }
-            }
-        }
-
-        let statusCode = (httpResponse as? HTTPURLResponse)?.statusCode ?? 0
-        logger.notice("🔑 License validation success [HTTP \(statusCode)]")
-
-        let validationResponse = try JSONDecoder().decode(LicenseValidationResponse.self, from: data)
-        let isValid = validationResponse.status == "granted"
-
-        // If limit_activations is nil or 0, the license doesn't require activation
-        let requiresActivation = (validationResponse.limit_activations ?? 0) > 0
-
-        return (
-            isValid: isValid, requiresActivation: requiresActivation,
-            activationsLimit: validationResponse.limit_activations
-        )
+        _ = key
+        return (isValid: true, requiresActivation: false, activationsLimit: nil)
     }
 
     // Activate a license key on this device
