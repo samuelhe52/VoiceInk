@@ -38,6 +38,17 @@ enum ModelProvider: String, Codable, Hashable, CaseIterable {
     }
 }
 
+extension ModelProvider {
+    var supportsTranscriptionPrompt: Bool {
+        switch self {
+        case .whisper, .qwen3ASR:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 // A unified protocol for any transcription model
 protocol TranscriptionModel: Identifiable, Hashable {
     var id: UUID { get }

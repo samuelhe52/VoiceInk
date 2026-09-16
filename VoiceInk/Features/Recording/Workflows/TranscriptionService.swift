@@ -13,7 +13,7 @@ struct TranscriptionRequestContext {
     }
 
     func scoped(to model: any TranscriptionModel) -> TranscriptionRequestContext {
-        guard model.provider == .whisper else {
+        guard model.provider.supportsTranscriptionPrompt else {
             return TranscriptionRequestContext(language: language, prompt: nil)
         }
 

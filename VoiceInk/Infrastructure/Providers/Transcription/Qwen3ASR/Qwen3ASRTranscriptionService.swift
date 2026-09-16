@@ -18,7 +18,12 @@ final class Qwen3ASRTranscriptionService: TranscriptionService, @unchecked Senda
         guard let qwenModel = model as? Qwen3ASRModel else {
             throw Qwen3ASRError.unsupportedModel(model.name)
         }
-        return try await runtime.transcribe(audioURL: audioURL, model: qwenModel, languageCode: context.language)
+        return try await runtime.transcribe(
+            audioURL: audioURL,
+            model: qwenModel,
+            languageCode: context.language,
+            prompt: context.prompt
+        )
     }
 
     func cleanup() async {
@@ -60,7 +65,12 @@ private actor Qwen3ASRRuntime {
         logger.notice("Loaded \(model.displayName, privacy: .public)")
     }
 
-    func transcribe(audioURL: URL, model: Qwen3ASRModel, languageCode: String?) async throws -> String {
+    func transcribe(
+        audioURL: URL,
+        model: Qwen3ASRModel,
+        languageCode: String?,
+        prompt: String?
+    ) async throws -> String {
         try await loadModel(for: model)
         defer { scheduleEviction() }
         guard let loadedModel else {
@@ -78,6 +88,7 @@ private actor Qwen3ASRRuntime {
         let output = loadedModel.generate(
             audio: audio,
             temperature: 0,
+            context: prompt ?? "",
             language: language,
             minChunkDuration: 0.1
         )
