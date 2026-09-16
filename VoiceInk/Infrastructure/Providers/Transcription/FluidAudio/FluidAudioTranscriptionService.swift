@@ -10,6 +10,7 @@ class FluidAudioTranscriptionService: TranscriptionService {
     private var activeNemotronModelName: String?
     private var cachedModels: AsrModels?
     private var loadingTask: (version: AsrModelVersion, task: Task<AsrModels, Error>)?
+    private var idleCleanupTask: Task<Void, Never>?
     private let audioConverter = AudioConverter()
     private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "FluidAudioTranscriptionService")
 
@@ -24,7 +25,8 @@ class FluidAudioTranscriptionService: TranscriptionService {
         return FluidAudioModelManager.languageHint(from: selectedLanguage, for: model.name)
     }
 
-    private func cleanupLoadedManagers() async {
+    private func cleanupLoadedManagers(releaseCachedModels: Bool = false) async {
+        cancelScheduledIdleCleanup()
         await unifiedAsrManager?.cleanup()
         await nemotronAsrManager?.cleanup()
         await asrManager?.cleanup()
@@ -34,6 +36,13 @@ class FluidAudioTranscriptionService: TranscriptionService {
         asrManager = nil
         activeVersion = nil
         activeNemotronModelName = nil
+
+        if releaseCachedModels {
+            loadingTask?.task.cancel()
+            loadingTask = nil
+            cachedModels = nil
+            logger.notice("FluidAudio model unloaded after keep-alive")
+        }
     }
 
     private func ensureModelsLoaded(for version: AsrModelVersion) async throws {
@@ -122,6 +131,7 @@ class FluidAudioTranscriptionService: TranscriptionService {
     }
 
     func loadModel(for model: FluidAudioModel) async throws {
+        cancelScheduledIdleCleanup()
         if FluidAudioModelManager.isNemotronModel(named: model.name) {
             // Realtime Nemotron uses a dedicated streaming manager; batch loads lazily in transcribe().
             return
@@ -138,6 +148,7 @@ class FluidAudioTranscriptionService: TranscriptionService {
     func transcribe(audioURL: URL, model: any TranscriptionModel, context: TranscriptionRequestContext) async throws
         -> String
     {
+        cancelScheduledIdleCleanup()
         if FluidAudioModelManager.isParakeetUnifiedModel(named: model.name) {
             try await ensureUnifiedModelsLoaded()
             guard let unifiedAsrManager else {
@@ -200,9 +211,31 @@ class FluidAudioTranscriptionService: TranscriptionService {
         try audioConverter.resampleAudioFile(audioURL)
     }
 
-    // Releases ASR resources but preserves cached models for reuse
+    // Releases ASR resources after the configured keep-alive window, preserving cached models.
     func cleanup() async {
-        await cleanupLoadedManagers()
+        cancelScheduledIdleCleanup()
+        guard asrManager != nil || unifiedAsrManager != nil || nemotronAsrManager != nil else { return }
+
+        let keepAliveSeconds = LocalModelRuntimeSettings.keepAliveSeconds
+        guard keepAliveSeconds > 0 else {
+            await cleanupLoadedManagers(releaseCachedModels: true)
+            return
+        }
+
+        logger.debug("Keeping FluidAudio model loaded for \(keepAliveSeconds, privacy: .public)s")
+        idleCleanupTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(keepAliveSeconds))
+            } catch {
+                return
+            }
+            await self?.cleanupLoadedManagers(releaseCachedModels: true)
+        }
+    }
+
+    private func cancelScheduledIdleCleanup() {
+        idleCleanupTask?.cancel()
+        idleCleanupTask = nil
     }
 
 }

@@ -258,6 +258,8 @@ private struct AdvancedModelSettingsSection: View {
     @AppStorage("IsVADEnabled") private var isVADEnabled = true
     @AppStorage("AppendTrailingSpace") private var appendTrailingSpace = true
     @AppStorage("PrewarmModelOnWake") private var prewarmModelOnWake = true
+    @AppStorage(LocalModelRuntimeSettings.keepAliveSecondsKey) private var localModelKeepAliveSeconds =
+        LocalModelRuntimeSettings.defaultKeepAliveSeconds
     @AppStorage(CloudTranscriptionSettings.timeoutKey) private var cloudTimeout =
         CloudTranscriptionSettings.defaultTimeout
 
@@ -288,6 +290,24 @@ private struct AdvancedModelSettingsSection: View {
                 }
             }
             .toggleStyle(.switch)
+
+            Picker(selection: $localModelKeepAliveSeconds) {
+                Text("Unload immediately").tag(0)
+                Text("15 seconds").tag(15)
+                Text("30 seconds").tag(30)
+                Text("1 minute").tag(60)
+                Text("2 minutes").tag(120)
+                Text("5 minutes").tag(300)
+                Text("10 minutes").tag(600)
+            } label: {
+                HStack(spacing: 4) {
+                    Text("Local model keep-alive")
+                    InfoTip(
+                        "Keep the selected local transcription model in memory after transcription so another recording can reuse it without loading again. Applies to Whisper, FluidAudio, transcribe.cpp, and Qwen3-ASR. The timer resets whenever the model is used."
+                    )
+                }
+            }
+            .pickerStyle(.menu)
 
             Picker(selection: $cloudTimeout) {
                 Text("10 seconds").tag(10)

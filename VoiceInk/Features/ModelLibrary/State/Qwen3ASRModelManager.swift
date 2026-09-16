@@ -10,59 +10,6 @@ struct Qwen3ASRDownloadStatus: Sendable {
     let isIndeterminate: Bool
 }
 
-enum Qwen3ASRModelCatalog {
-    static let modelName = "qwen3-asr-0.6b-8bit"
-    static let repository = "mlx-community/Qwen3-ASR-0.6B-8bit"
-    static let repositoryRevision = "89e96d92ba34aca20b3e29fb10cc284097d1219f"
-    static let weightsFileName = "model.safetensors"
-    static let expectedWeightsSize: Int64 = 1_006_229_426
-    static let expectedWeightsSHA256 = "b5bfe4abc1b4c6e58b633096682ec2b6297298add1527119936107d211adf0e8"
-
-    private static let requiredFileNames = [
-        "config.json",
-        "merges.txt",
-        "preprocessor_config.json",
-        "tokenizer_config.json",
-        "vocab.json",
-        weightsFileName,
-    ]
-
-    static var modelsRootDirectory: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("com.prakashjoshipax.VoiceInk", isDirectory: true)
-            .appendingPathComponent("Qwen3ASR", isDirectory: true)
-    }
-
-    static var modelDirectory: URL {
-        modelsRootDirectory.appendingPathComponent(modelName, isDirectory: true)
-    }
-
-    static var checksumFileURL: URL {
-        modelDirectory.appendingPathComponent(".model.safetensors.sha256")
-    }
-
-    static var installedModelDirectory: URL? {
-        modelDirectoryIsValid(modelDirectory) ? modelDirectory : nil
-    }
-
-    static func modelDirectoryIsValid(_ directory: URL) -> Bool {
-        for fileName in requiredFileNames {
-            let fileURL = directory.appendingPathComponent(fileName)
-            let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
-            guard values?.isRegularFile == true else { return false }
-        }
-
-        let weightsURL = directory.appendingPathComponent(weightsFileName)
-        let weightsSize = try? weightsURL.resourceValues(forKeys: [.fileSizeKey]).fileSize
-        guard Int64(weightsSize ?? 0) == expectedWeightsSize else { return false }
-
-        let checksumURL = directory.appendingPathComponent(".model.safetensors.sha256")
-        let installedChecksum = try? String(contentsOf: checksumURL, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return installedChecksum == expectedWeightsSHA256
-    }
-}
-
 @MainActor
 final class Qwen3ASRModelManager: ObservableObject {
     static let shared = Qwen3ASRModelManager()
@@ -78,11 +25,12 @@ final class Qwen3ASRModelManager: ObservableObject {
     private init() {}
 
     func isModelDownloaded(_ model: Qwen3ASRModel) -> Bool {
-        model.name == Qwen3ASRModelCatalog.modelName && Qwen3ASRModelCatalog.installedModelDirectory != nil
+        guard let model = Qwen3ASRModelCatalog.variant(named: model.name) else { return false }
+        return Qwen3ASRModelCatalog.installedModelDirectory(for: model) != nil
     }
 
     func isModelDownloaded(named modelName: String) -> Bool {
-        modelName == Qwen3ASRModelCatalog.modelName && Qwen3ASRModelCatalog.installedModelDirectory != nil
+        Qwen3ASRModelCatalog.installedModelDirectory(named: modelName) != nil
     }
 
     func isModelDownloading(_ model: Qwen3ASRModel) -> Bool {
@@ -95,14 +43,14 @@ final class Qwen3ASRModelManager: ObservableObject {
 
     func downloadModel(_ model: Qwen3ASRModel) async {
         guard SystemArchitecture.isAppleSilicon,
-            model.name == Qwen3ASRModelCatalog.modelName,
+            let model = Qwen3ASRModelCatalog.variant(named: model.name),
             activeDownloadIDs[model.name] == nil,
             !isModelDownloaded(model)
         else {
             return
         }
 
-        guard let repositoryID = Repo.ID(rawValue: Qwen3ASRModelCatalog.repository) else {
+        guard let repositoryID = Repo.ID(rawValue: model.repository) else {
             reportFailure(CocoaError(.fileReadUnknown), for: model)
             return
         }
@@ -122,7 +70,13 @@ final class Qwen3ASRModelManager: ObservableObject {
             .appendingPathComponent("com.prakashjoshipax.VoiceInk", isDirectory: true)
             .appendingPathComponent("Qwen3ASRDownloadCache", isDirectory: true)
         let cache = HubCache(cacheDirectory: cacheDirectory)
-        let client = HubClient(cache: cache)
+        // Catalog repositories are public. Explicitly disable automatic token discovery so an
+        // expired Hugging Face CLI/OAuth token cannot make otherwise anonymous downloads fail.
+        let client = HubClient(
+            host: HubClient.defaultHost,
+            tokenProvider: .none,
+            cache: cache
+        )
 
         defer {
             if activeDownloadIDs[model.name] == downloadID {
@@ -142,7 +96,7 @@ final class Qwen3ASRModelManager: ObservableObject {
             _ = try await client.downloadSnapshot(
                 of: repositoryID,
                 to: stagingDirectory,
-                revision: Qwen3ASRModelCatalog.repositoryRevision,
+                revision: model.repositoryRevision,
                 matching: ["*.json", "*.txt", "*.safetensors"],
                 maxConcurrentDownloads: 4
             ) { [weak self] progress in
@@ -165,7 +119,7 @@ final class Qwen3ASRModelManager: ObservableObject {
                 try Self.sha256(of: weightsURL)
             }.value
             try Task.checkCancellation()
-            guard checksum == Qwen3ASRModelCatalog.expectedWeightsSHA256 else {
+            guard checksum == model.expectedWeightsSHA256 else {
                 throw CocoaError(.fileReadCorruptFile)
             }
             try checksum.write(
@@ -173,15 +127,16 @@ final class Qwen3ASRModelManager: ObservableObject {
                 atomically: true,
                 encoding: .utf8
             )
-            guard Qwen3ASRModelCatalog.modelDirectoryIsValid(stagingDirectory) else {
+            guard Qwen3ASRModelCatalog.modelDirectoryIsValid(stagingDirectory, for: model) else {
                 throw CocoaError(.fileReadCorruptFile)
             }
 
-            if fileManager.fileExists(atPath: Qwen3ASRModelCatalog.modelDirectory.path) {
-                try fileManager.removeItem(at: Qwen3ASRModelCatalog.modelDirectory)
+            let modelDirectory = Qwen3ASRModelCatalog.modelDirectory(for: model)
+            if fileManager.fileExists(atPath: modelDirectory.path) {
+                try fileManager.removeItem(at: modelDirectory)
             }
-            try fileManager.moveItem(at: stagingDirectory, to: Qwen3ASRModelCatalog.modelDirectory)
-            guard Qwen3ASRModelCatalog.installedModelDirectory != nil else {
+            try fileManager.moveItem(at: stagingDirectory, to: modelDirectory)
+            guard Qwen3ASRModelCatalog.installedModelDirectory(for: model) != nil else {
                 throw CocoaError(.fileReadCorruptFile)
             }
 
@@ -198,16 +153,17 @@ final class Qwen3ASRModelManager: ObservableObject {
     }
 
     func deleteModel(_ model: Qwen3ASRModel) {
-        guard model.name == Qwen3ASRModelCatalog.modelName else { return }
+        guard let model = Qwen3ASRModelCatalog.variant(named: model.name) else { return }
         objectWillChange.send()
-        try? FileManager.default.removeItem(at: Qwen3ASRModelCatalog.modelDirectory)
+        try? FileManager.default.removeItem(at: Qwen3ASRModelCatalog.modelDirectory(for: model))
         onModelDeleted?(model.name)
         onModelsChanged?()
     }
 
     func showModelInFinder(_ model: Qwen3ASRModel) {
-        guard model.name == Qwen3ASRModelCatalog.modelName,
-            let modelDirectory = Qwen3ASRModelCatalog.installedModelDirectory
+        guard
+            let model = Qwen3ASRModelCatalog.variant(named: model.name),
+            let modelDirectory = Qwen3ASRModelCatalog.installedModelDirectory(for: model)
         else {
             return
         }

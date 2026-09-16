@@ -97,15 +97,6 @@ enum TranscriptionModelRegistry {
                 supportedLanguages: LanguageDictionary.senseVoiceSmall
             ),
 
-            Qwen3ASRModel(
-                name: "qwen3-asr-0.6b-8bit",
-                displayName: "Qwen3-ASR 0.6B (8-bit)",
-                description: "High-quality multilingual transcription accelerated by MLX on Apple Silicon",
-                size: "965 MB",
-                quantization: "8-bit",
-                supportedLanguages: LanguageDictionary.qwen3ASR
-            ),
-
             // Local Models
             WhisperModel(
                 name: "ggml-tiny",
@@ -189,7 +180,8 @@ enum TranscriptionModelRegistry {
             ),
         ]
 
+        let qwen3ASRModels: [any TranscriptionModel] = Qwen3ASRModelCatalog.supportedVariants
         let cloudModels: [any TranscriptionModel] = CloudProviderRegistry.allProviders.flatMap { $0.models }
-        return nonCloudModels + cloudModels
+        return nonCloudModels + qwen3ASRModels + cloudModels
     }()
 }

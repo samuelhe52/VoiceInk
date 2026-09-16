@@ -100,6 +100,8 @@ class WhisperModelManager: ObservableObject {
     @Published var loadedWhisperModel: WhisperModelFile?
     @Published var isModelLoading = false
 
+    private var idleUnloadTask: Task<Void, Never>?
+
     let modelsDirectory: URL
     let whisperPrompt = WhisperPrompt()
 
@@ -144,6 +146,7 @@ class WhisperModelManager: ObservableObject {
     // MARK: - Model Loading
 
     func loadModel(_ model: WhisperModelFile) async throws {
+        cancelScheduledIdleUnload()
         guard whisperContext == nil else { return }
 
         isModelLoading = true
@@ -376,9 +379,7 @@ class WhisperModelManager: ObservableObject {
 
     func unloadModel() {
         Task {
-            await whisperContext?.releaseResources()
-            whisperContext = nil
-            isModelLoaded = false
+            await unloadModelNow(reason: "explicit unload")
         }
     }
 
@@ -395,14 +396,42 @@ class WhisperModelManager: ObservableObject {
 
     // MARK: - Resource Management
 
-    /// Releases the WhisperContext and resets model-loaded state.
+    /// Releases the WhisperContext after the configured local-model keep-alive window.
     /// Does NOT call serviceRegistry.cleanup() — that is VoiceInkEngine's responsibility.
     func cleanupResources() async {
-        logger.notice("WhisperModelManager.cleanupResources: releasing whisper context")
+        cancelScheduledIdleUnload()
+        guard whisperContext != nil else { return }
+
+        let keepAliveSeconds = LocalModelRuntimeSettings.keepAliveSeconds
+        guard keepAliveSeconds > 0 else {
+            await unloadModelNow(reason: "keep-alive disabled")
+            return
+        }
+
+        logger.debug("Keeping Whisper model loaded for \(keepAliveSeconds, privacy: .public)s")
+        idleUnloadTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(keepAliveSeconds))
+            } catch {
+                return
+            }
+            await self?.unloadModelNow(reason: "keep-alive expired")
+        }
+    }
+
+    private func cancelScheduledIdleUnload() {
+        idleUnloadTask?.cancel()
+        idleUnloadTask = nil
+    }
+
+    private func unloadModelNow(reason: String) async {
+        cancelScheduledIdleUnload()
+        guard whisperContext != nil else { return }
         await whisperContext?.releaseResources()
         whisperContext = nil
         isModelLoaded = false
-        logger.notice("WhisperModelManager.cleanupResources: completed")
+        loadedWhisperModel = nil
+        logger.notice("Whisper model unloaded: \(reason, privacy: .public)")
     }
 
     // MARK: - Import Local Model

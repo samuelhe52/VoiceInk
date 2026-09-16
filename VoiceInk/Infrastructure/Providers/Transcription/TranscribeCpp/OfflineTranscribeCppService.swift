@@ -30,6 +30,7 @@ final class OfflineTranscribeCppService: TranscriptionService, @unchecked Sendab
     private var loadedState: LoadedState?
     private var loadingState: LoadingState?
     private var activeTranscriptionCount = 0
+    private var idleUnloadTask: Task<Void, Never>?
     private var notificationObservers: [NSObjectProtocol] = []
     private var memoryPressureSource: DispatchSourceMemoryPressure?
     private let audioConverter = AudioConverter()
@@ -145,7 +146,7 @@ final class OfflineTranscribeCppService: TranscriptionService, @unchecked Sendab
     }
 
     func cleanup() {
-        unloadModel()
+        scheduleIdleUnload()
     }
 
     func unloadModel() {
@@ -156,6 +157,7 @@ final class OfflineTranscribeCppService: TranscriptionService, @unchecked Sendab
         for model: TranscribeCppModel,
         artifact: TranscribeCppModelArtifact
     ) async throws -> Model {
+        cancelScheduledIdleUnload()
         let resolvedState: LoadResolution = stateLock.withLock {
             if let loadedState, loadedState.modelName == model.name {
                 return .loaded(loadedState.model)
@@ -252,18 +254,21 @@ final class OfflineTranscribeCppService: TranscriptionService, @unchecked Sendab
     }
 
     private func unloadModel(where shouldUnload: (String) -> Bool) {
-        let didUnload = stateLock.withLock {
+        let (didUnload, scheduledTask) = stateLock.withLock {
+            let scheduledTask = idleUnloadTask
+            idleUnloadTask = nil
             guard let activeModelName = loadedState?.modelName ?? loadingState?.modelName,
                 shouldUnload(activeModelName),
                 activeTranscriptionCount == 0
             else {
-                return false
+                return (false, scheduledTask)
             }
             loadingState?.task.cancel()
             loadingState = nil
             loadedState = nil
-            return true
+            return (true, scheduledTask)
         }
+        scheduledTask?.cancel()
         if didUnload {
             logger.notice("transcribe.cpp runtime unloaded")
         }
@@ -280,7 +285,7 @@ final class OfflineTranscribeCppService: TranscriptionService, @unchecked Sendab
     }
 
     private func releaseModel(named modelName: String) {
-        let didUnload = stateLock.withLock {
+        let shouldScheduleUnload = stateLock.withLock {
             guard activeTranscriptionCount > 0 else { return false }
             activeTranscriptionCount -= 1
             guard activeTranscriptionCount == 0,
@@ -288,14 +293,62 @@ final class OfflineTranscribeCppService: TranscriptionService, @unchecked Sendab
             else {
                 return false
             }
-            loadingState?.task.cancel()
-            loadingState = nil
-            loadedState = nil
             return true
         }
-        if didUnload {
-            logger.notice("transcribe.cpp runtime unloaded")
+        if shouldScheduleUnload {
+            scheduleIdleUnload()
         }
+    }
+
+    private func scheduleIdleUnload() {
+        cancelScheduledIdleUnload()
+
+        let keepAliveSeconds = LocalModelRuntimeSettings.keepAliveSeconds
+        guard keepAliveSeconds > 0 else {
+            unloadModel()
+            return
+        }
+
+        let scheduledModelName: String? = stateLock.withLock {
+                guard activeTranscriptionCount == 0 else { return nil }
+                return loadedState?.modelName ?? loadingState?.modelName
+            }
+        guard let modelName = scheduledModelName else {
+            return
+        }
+
+        logger.debug(
+            "Keeping transcribe.cpp model \(modelName, privacy: .public) loaded for \(keepAliveSeconds, privacy: .public)s"
+        )
+        let task = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(keepAliveSeconds))
+            } catch {
+                return
+            }
+            self?.unloadModel(named: modelName)
+        }
+        let installed = stateLock.withLock {
+            guard activeTranscriptionCount == 0,
+                loadedState?.modelName == modelName || loadingState?.modelName == modelName
+            else {
+                return false
+            }
+            idleUnloadTask = task
+            return true
+        }
+        if !installed {
+            task.cancel()
+        }
+    }
+
+    private func cancelScheduledIdleUnload() {
+        let task = stateLock.withLock {
+            let task = idleUnloadTask
+            idleUnloadTask = nil
+            return task
+        }
+        task?.cancel()
     }
 
     private func resolveArtifact(for model: TranscribeCppModel) throws -> TranscribeCppModelArtifact {

@@ -4,7 +4,7 @@ import MLXAudioSTT
 import os
 
 final class Qwen3ASRTranscriptionService: TranscriptionService, @unchecked Sendable {
-    private let runtime = Qwen3ASRRuntime()
+    private let runtime = Qwen3ASRRuntime.shared
 
     func loadModel(for model: Qwen3ASRModel) async throws {
         try await runtime.loadModel(for: model)
@@ -27,19 +27,23 @@ final class Qwen3ASRTranscriptionService: TranscriptionService, @unchecked Senda
 }
 
 private actor Qwen3ASRRuntime {
+    static let shared = Qwen3ASRRuntime()
+
     private var loadedModel: MLXAudioSTT.Qwen3ASRModel?
     private var loadedModelName: String?
+    private var evictionTask: Task<Void, Never>?
     private let audioProcessor = AudioProcessor()
     private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "Qwen3ASR")
 
     func loadModel(for model: Qwen3ASRModel) async throws {
-        guard model.name == Qwen3ASRModelCatalog.modelName else {
+        guard let model = Qwen3ASRModelCatalog.variant(named: model.name) else {
             throw Qwen3ASRError.unsupportedModel(model.name)
         }
+        cancelScheduledEviction()
         guard SystemArchitecture.isAppleSilicon else {
             throw Qwen3ASRError.appleSiliconRequired
         }
-        guard let modelDirectory = Qwen3ASRModelCatalog.installedModelDirectory else {
+        guard let modelDirectory = Qwen3ASRModelCatalog.installedModelDirectory(for: model) else {
             throw Qwen3ASRError.modelNotDownloaded
         }
         guard loadedModel == nil || loadedModelName != model.name else { return }
@@ -58,6 +62,7 @@ private actor Qwen3ASRRuntime {
 
     func transcribe(audioURL: URL, model: Qwen3ASRModel, languageCode: String?) async throws -> String {
         try await loadModel(for: model)
+        defer { scheduleEviction() }
         guard let loadedModel else {
             throw Qwen3ASRError.modelLoadFailed
         }
@@ -83,9 +88,53 @@ private actor Qwen3ASRRuntime {
     }
 
     func cleanup() {
+        scheduleEviction()
+    }
+
+    private func scheduleEviction() {
+        evictionTask?.cancel()
+        evictionTask = nil
+
+        guard loadedModel != nil else { return }
+
+        let keepAliveSeconds = LocalModelRuntimeSettings.keepAliveSeconds
+        guard keepAliveSeconds > 0 else {
+            unloadModel(reason: "keep-alive disabled")
+            return
+        }
+
+        let scheduledModelName = loadedModelName
+        logger.debug(
+            "Keeping \(scheduledModelName ?? "Qwen3-ASR", privacy: .public) loaded for \(keepAliveSeconds, privacy: .public)s"
+        )
+        evictionTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(keepAliveSeconds))
+            } catch {
+                return
+            }
+            await self?.evictModelIfStillLoaded(scheduledModelName)
+        }
+    }
+
+    private func cancelScheduledEviction() {
+        evictionTask?.cancel()
+        evictionTask = nil
+    }
+
+    private func evictModelIfStillLoaded(_ modelName: String?) {
+        guard loadedModelName == modelName else { return }
+        unloadModel(reason: "keep-alive expired")
+    }
+
+    private func unloadModel(reason: String) {
+        let modelName = loadedModelName
+        evictionTask?.cancel()
+        evictionTask = nil
         loadedModel = nil
         loadedModelName = nil
         Memory.clearCache()
+        logger.notice("Unloaded \(modelName ?? "Qwen3-ASR", privacy: .public): \(reason, privacy: .public)")
     }
 
     nonisolated static func languageName(for code: String?) -> String? {

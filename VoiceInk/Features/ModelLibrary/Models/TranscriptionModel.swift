@@ -134,9 +134,16 @@ struct Qwen3ASRModel: TranscriptionModel, Sendable {
     let displayName: String
     let description: String
     let provider: ModelProvider = .qwen3ASR
-    let size: String
+    let repository: String
+    let repositoryRevision: String
+    let expectedWeightsSize: Int64
+    let expectedWeightsSHA256: String
     let quantization: String
     let supportedLanguages: [String: String]
+
+    var size: String {
+        ByteCountFormatter.string(fromByteCount: expectedWeightsSize, countStyle: .file)
+    }
 
     var isMultilingualModel: Bool { true }
     let supportsStreaming = false
