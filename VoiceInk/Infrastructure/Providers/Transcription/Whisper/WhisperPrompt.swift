@@ -5,6 +5,7 @@ class WhisperPrompt: ObservableObject {
     @Published var transcriptionPrompt: String = UserDefaults.standard.string(forKey: "TranscriptionPrompt") ?? ""
 
     nonisolated private static let customPromptsKey = "CustomLanguagePrompts"
+    nonisolated private static let disabledPromptLanguagesKey = "DisabledTranscriptionPromptLanguages"
 
     // Store user-customized prompts
     private var customPrompts: [String: String] = [:]
@@ -89,7 +90,7 @@ class WhisperPrompt: ObservableObject {
 
         // Get the prompt for the selected language (custom if available, otherwise default)
         let basePrompt = getLanguagePrompt(for: selectedLanguage)
-        let prompt = basePrompt.isEmpty ? "" : basePrompt
+        let prompt = isPromptEnabled(for: selectedLanguage) ? basePrompt : ""
 
         transcriptionPrompt = prompt
         UserDefaults.standard.set(prompt, forKey: "TranscriptionPrompt")
@@ -109,9 +110,19 @@ class WhisperPrompt: ObservableObject {
         return Self.languagePrompts[language] ?? Self.languagePrompts["default"] ?? ""
     }
 
+    func hasCustomPrompt(for language: String) -> Bool {
+        guard let customPrompt = customPrompts[language] else { return false }
+        return !customPrompt.isEmpty
+    }
+
+    func isPromptEnabled(for language: String) -> Bool {
+        !Self.disabledPromptLanguages.contains(language)
+    }
+
     /// Returns the saved prompt for a language.
     nonisolated static func resolvedPrompt(for language: String?) -> String {
         guard let language, !language.isEmpty else { return "" }
+        guard !disabledPromptLanguages.contains(language) else { return "" }
 
         if let savedPrompts = UserDefaults.standard.dictionary(forKey: customPromptsKey) as? [String: String],
             let customPrompt = savedPrompts[language],
@@ -124,11 +135,38 @@ class WhisperPrompt: ObservableObject {
     }
 
     func setCustomPrompt(_ prompt: String, for language: String) {
-        customPrompts[language] = prompt
+        if prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            customPrompts.removeValue(forKey: language)
+        } else {
+            customPrompts[language] = prompt
+        }
         saveCustomPrompts()
         updateTranscriptionPrompt()
 
         // Force update the UI
         objectWillChange.send()
+    }
+
+    func resetCustomPrompt(for language: String) {
+        customPrompts.removeValue(forKey: language)
+        saveCustomPrompts()
+        updateTranscriptionPrompt()
+        objectWillChange.send()
+    }
+
+    func setPromptEnabled(_ isEnabled: Bool, for language: String) {
+        var disabledLanguages = Self.disabledPromptLanguages
+        if isEnabled {
+            disabledLanguages.remove(language)
+        } else {
+            disabledLanguages.insert(language)
+        }
+        UserDefaults.standard.set(Array(disabledLanguages).sorted(), forKey: Self.disabledPromptLanguagesKey)
+        updateTranscriptionPrompt()
+        objectWillChange.send()
+    }
+
+    nonisolated private static var disabledPromptLanguages: Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: disabledPromptLanguagesKey) ?? [])
     }
 }

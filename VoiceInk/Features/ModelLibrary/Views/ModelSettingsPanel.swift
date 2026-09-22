@@ -72,10 +72,37 @@ private struct ModelSettingsTabBar: View {
 
 private struct TranscriptionModelSettingsView: View {
     @EnvironmentObject private var whisperModelManager: WhisperModelManager
+    @EnvironmentObject private var transcriptionModelManager: TranscriptionModelManager
+
+    private var promptModel: (any TranscriptionModel)? {
+        let activeModeModelName = ModeManager.shared.currentEffectiveConfiguration?.selectedTranscriptionModelName
+
+        if let activeModeModelName,
+            let activeModeModel = transcriptionModelManager.allAvailableModels.first(where: {
+                $0.name == activeModeModelName && $0.provider.supportsTranscriptionPrompt
+            })
+        {
+            return activeModeModel
+        }
+
+        if let currentModel = transcriptionModelManager.currentTranscriptionModel,
+            currentModel.provider.supportsTranscriptionPrompt
+        {
+            return currentModel
+        }
+
+        return transcriptionModelManager.usableModels.first(where: { $0.provider.supportsTranscriptionPrompt })
+            ?? transcriptionModelManager.allAvailableModels.first(where: { $0.provider.supportsTranscriptionPrompt })
+    }
 
     var body: some View {
         Form {
-            WhisperPromptSettingsSection(whisperPrompt: whisperModelManager.whisperPrompt)
+            if let model = promptModel {
+                TranscriptionPromptSettingsSection(
+                    promptSettings: whisperModelManager.whisperPrompt,
+                    model: model
+                )
+            }
 
             FillerWordsSettingsSection()
 
@@ -87,18 +114,34 @@ private struct TranscriptionModelSettingsView: View {
     }
 }
 
-private struct WhisperPromptSettingsSection: View {
-    @ObservedObject var whisperPrompt: WhisperPrompt
+private struct TranscriptionPromptSettingsSection: View {
+    @ObservedObject var promptSettings: WhisperPrompt
+    let model: any TranscriptionModel
     @State private var promptLanguage = "en"
     @State private var draftPrompt = ""
     @State private var isEditing = false
 
     private var supportedLanguages: [String: String] {
-        LanguageDictionary.forProvider(isMultilingual: true, provider: .whisper)
+        TranscriptionLanguageSupport.languages(for: model)
     }
 
     private var savedPrompt: String {
-        whisperPrompt.getLanguagePrompt(for: promptLanguage)
+        promptSettings.getLanguagePrompt(for: promptLanguage)
+    }
+
+    private var hasCustomPrompt: Bool {
+        promptSettings.hasCustomPrompt(for: promptLanguage)
+    }
+
+    private var isPromptEnabled: Bool {
+        promptSettings.isPromptEnabled(for: promptLanguage)
+    }
+
+    private var promptEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { isPromptEnabled },
+            set: { promptSettings.setPromptEnabled($0, for: promptLanguage) }
+        )
     }
 
     var body: some View {
@@ -114,7 +157,20 @@ private struct WhisperPromptSettingsSection: View {
                 .accessibilityLabel("Language")
                 .disabled(isEditing)
 
-                if promptLanguage != "auto", isEditing {
+                Text(
+                    String(
+                        format: String(localized: "Used by %@ when transcribing in this language."),
+                        model.displayName
+                    )
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                Toggle("Send prompt to the transcription model", isOn: promptEnabledBinding)
+                    .toggleStyle(.switch)
+                    .disabled(isEditing)
+
+                if isEditing {
                     TextEditor(text: $draftPrompt)
                         .font(.body)
                         .padding(6)
@@ -126,7 +182,7 @@ private struct WhisperPromptSettingsSection: View {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .stroke(Color.secondary.opacity(0.18))
                         }
-                        .accessibilityLabel("Whisper Prompt")
+                        .accessibilityLabel("Transcription Prompt")
 
                     HStack(spacing: 10) {
                         Spacer()
@@ -137,35 +193,51 @@ private struct WhisperPromptSettingsSection: View {
                         }
 
                         Button("Save") {
-                            whisperPrompt.setCustomPrompt(draftPrompt, for: promptLanguage)
+                            promptSettings.setCustomPrompt(draftPrompt, for: promptLanguage)
                             isEditing = false
                         }
                         .keyboardShortcut(.defaultAction)
                     }
                     .controlSize(.small)
-                } else if promptLanguage != "auto" {
-                    if !savedPrompt.isEmpty {
+                } else if isPromptEnabled {
+                    if savedPrompt.isEmpty {
+                        Text("No prompt will be sent for this language.")
+                            .foregroundStyle(.secondary)
+                            .italic()
+                    } else {
                         Text(savedPrompt)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    Button("Edit") {
-                        draftPrompt = savedPrompt
-                        isEditing = true
+                    HStack(spacing: 10) {
+                        if hasCustomPrompt {
+                            Button("Reset to Default") {
+                                promptSettings.resetCustomPrompt(for: promptLanguage)
+                                draftPrompt = savedPrompt
+                            }
+                        }
+
+                        Button("Edit") {
+                            draftPrompt = savedPrompt
+                            isEditing = true
+                        }
                     }
+                } else {
+                    Text("Prompt disabled. No prompt will be sent for this language.")
+                        .foregroundStyle(.secondary)
+                        .italic()
                 }
             }
             .padding(.vertical, 2)
         } header: {
             HStack(spacing: 4) {
-                Text("Whisper Prompt")
+                Text("Transcription Prompt")
                 InfoTip(
                     LocalizedStringKey(
-                        "Only local Whisper models use this. Add example text to guide spelling and style."
-                    ),
-                    learnMoreURL: "https://cookbook.openai.com/examples/whisper_prompting_guide#comparison-with-gpt-prompting"
+                        "Supported transcription models use this text as context to guide spelling, vocabulary, and style. Prompts are saved separately for each language."
+                    )
                 )
             }
         }
@@ -173,6 +245,11 @@ private struct WhisperPromptSettingsSection: View {
             selectCurrentTranscriptionLanguage()
         }
         .onChange(of: promptLanguage) { _, _ in
+            draftPrompt = savedPrompt
+            isEditing = false
+        }
+        .onChange(of: model.name) { _, _ in
+            selectCurrentTranscriptionLanguage()
             draftPrompt = savedPrompt
             isEditing = false
         }
