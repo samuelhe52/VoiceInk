@@ -3,7 +3,7 @@ import SwiftData
 import os
 
 /// Handles the full post-recording pipeline:
-/// transcribe → filter → format → word-replace → AI enhance → deliver → save
+/// transcribe → filter → vocabulary-correct → format → word-replace → AI enhance → deliver → save
 @MainActor
 class TranscriptionPipeline {
     struct AssistantHooks {
@@ -44,6 +44,7 @@ class TranscriptionPipeline {
     ///   - audioURL: The recorded audio file.
     ///   - transcriptionConfiguration: Mode-resolved transcription engine settings for this phase.
     ///   - session: An active streaming session if one was prepared, otherwise nil.
+    ///   - vocabularyPreparation: Saved vocabulary plus any screen names ready by transcription completion.
     ///   - onStateChange: Called when the pipeline moves to a new recording state (e.g. `.enhancing`).
     ///   - shouldCancel: Returns true if the user requested cancellation.
     ///   - onCancel: Called when cancellation is detected to cancel active session state.
@@ -56,14 +57,21 @@ class TranscriptionPipeline {
         session: TranscriptionSession?,
         triggerWordModeSelection: @escaping (String) -> String? = { _ in nil },
         enhancementConfiguration: @escaping () -> EnhancementRuntimeConfiguration?,
-        recordingContextSnapshot: @escaping () async -> RecordingContextSnapshot? = { nil },
+        vocabularyPreparation: RecordingVocabularyPreparation,
+        recordingContextSnapshot: () -> RecordingContextSnapshot? = { nil },
+        cancelContextCapture: () -> Void = {},
         outputConfiguration: @escaping () -> OutputRuntimeConfiguration,
+        sendAfterPaste: Bool = false,
         onStateChange: @escaping (RecordingState) -> Void,
         shouldCancel: () -> Bool,
         onCancel: @escaping () async -> Void,
         onDismiss: @escaping () async -> Void,
         assistant: AssistantHooks = .inactive
     ) async {
+        defer {
+            cancelContextCapture()
+            vocabularyPreparation.finish()
+        }
         let model = transcriptionConfiguration.model
         var finalText: String?
         var responseError: String?
@@ -71,6 +79,7 @@ class TranscriptionPipeline {
         var responseConfig: EnhancementRuntimeConfiguration?
 
         func finishCanceledTranscription() async {
+            vocabularyPreparation.finish()
             await onCancel()
 
             let canceledDuration: TimeInterval?
@@ -99,18 +108,20 @@ class TranscriptionPipeline {
         }
 
         do {
+            let transcriptionVocabulary = vocabularyPreparation.current
             let transcriptionStart = Date()
             var text: String
             if let session {
-                text = try await session.transcribe(audioURL: audioURL)
+                text = try await session.transcribe(audioURL: audioURL, vocabulary: transcriptionVocabulary)
             } else {
                 text = try await serviceRegistry.transcribe(
                     audioURL: audioURL,
                     model: model,
-                    context: transcriptionConfiguration.requestContext
+                    context: transcriptionConfiguration.requestContext.withVocabulary(transcriptionVocabulary)
                 )
             }
-            text = TranscriptionOutputFilter.filter(text)
+            let vocabulary = vocabularyPreparation.finish()
+            text = TranscriptionOutputFilter.filter(text, language: transcriptionConfiguration.language)
             let transcriptionDuration = Date().timeIntervalSince(transcriptionStart)
 
             if shouldCancel() {
@@ -124,6 +135,12 @@ class TranscriptionPipeline {
                 let processedText = triggerWordModeSelection(text)
             {
                 text = processedText
+            }
+
+            text = try await vocabulary.correctTranscription(text)
+            if shouldCancel() {
+                await finishCanceledTranscription()
+                return
             }
 
             let formattingConfiguration = resolveFormattingConfiguration()
@@ -181,22 +198,43 @@ class TranscriptionPipeline {
 
                     onStateChange(.enhancing)
                     let textForAI = text
-                    if shouldRespondInRecorder {
-                        await assistant.startResponse(textForAI, resolvedEnhancementConfiguration)
-                    }
-
                     do {
-                        let contextSnapshot = await recordingContextSnapshot()
-                        let enhancementResult = try await enhancementService.enhance(
-                            textForAI,
-                            configuration: resolvedEnhancementConfiguration,
-                            contextSnapshot: contextSnapshot
+                        defer { cancelContextCapture() }
+                        if Task.isCancelled || shouldCancel() {
+                            await finishCanceledTranscription()
+                            return
+                        }
+                        let selectedText = await SelectedTextService.fetchSelectedText(
+                            isEnabled: resolvedEnhancementConfiguration.useSelectedTextContext
                         )
-                        transcription.enhancedText = enhancementResult.text
+                        if Task.isCancelled || shouldCancel() {
+                            await finishCanceledTranscription()
+                            return
+                        }
+                        if shouldRespondInRecorder {
+                            await assistant.startResponse(textForAI, resolvedEnhancementConfiguration)
+                        }
+                        if Task.isCancelled || shouldCancel() {
+                            await finishCanceledTranscription()
+                            return
+                        }
+                        // Pick up OCR that finished during selection capture or response setup,
+                        // without waiting for it. Clipboard text remains the recording-start snapshot.
+                        var contextSnapshot = recordingContextSnapshot() ?? RecordingContextSnapshot()
+                        contextSnapshot.selectedText = selectedText
                         transcription.aiEnhancementModelName =
                             resolvedEnhancementConfiguration.modelName
                             ?? resolvedEnhancementConfiguration.provider?.defaultModel
-                        transcription.promptName = enhancementResult.promptName
+                        transcription.promptName = resolvedEnhancementConfiguration.prompt?.title
+                        let enhancementResult = try await enhancementService.enhance(
+                            textForAI,
+                            configuration: resolvedEnhancementConfiguration,
+                            contextSnapshot: contextSnapshot,
+                            vocabulary: vocabulary
+                        )
+                        transcription.enhancedText = enhancementResult.text
+                        transcription.promptName =
+                            enhancementResult.promptName ?? resolvedEnhancementConfiguration.prompt?.title
                         transcription.enhancementDuration = enhancementResult.duration
                         transcription.aiRequestSystemMessage = enhancementResult.systemMessage
                         transcription.aiRequestUserMessage = enhancementResult.userMessage
@@ -222,6 +260,7 @@ class TranscriptionPipeline {
 
             transcription.transcriptionStatus = TranscriptionStatus.completed.rawValue
         } catch {
+            vocabularyPreparation.finish()
             let errorDescription = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
 
             if let nativeAppleError = error as? NativeAppleTranscriptionService.ServiceError,
@@ -278,7 +317,8 @@ class TranscriptionPipeline {
                 output: outputForDelivery ?? outputConfiguration(),
                 responseConfig: responseConfig,
                 responseError: responseError,
-                isAssistantFollowUp: assistant.isFollowUp
+                isAssistantFollowUp: assistant.isFollowUp,
+                sendAfterPaste: sendAfterPaste
             ),
             actions: TranscriptionDelivery.Actions(
                 setState: onStateChange,

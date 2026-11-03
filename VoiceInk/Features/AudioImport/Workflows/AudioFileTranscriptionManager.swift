@@ -170,15 +170,17 @@ class AudioTranscriptionManager: ObservableObject {
 
             // Phase: Transcribing
             item.status = .processing(phase: .transcribing)
+            let vocabulary = CustomVocabularyService.shared.loadSavedVocabulary(from: modelContext)
             let transcriptionStart = Date()
             var text = try await serviceRegistry.transcribe(
                 audioURL: permanentURL,
                 model: currentModel,
-                context: transcriptionConfiguration.requestContext
+                context: transcriptionConfiguration.requestContext.withVocabulary(vocabulary)
             )
             let transcriptionDuration = Date().timeIntervalSince(transcriptionStart)
-            text = TranscriptionOutputFilter.filter(text)
+            text = TranscriptionOutputFilter.filter(text, language: transcriptionConfiguration.language)
             text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            text = try await vocabulary.correctTranscription(text)
 
             let modeMetadata = transcriptionConfiguration.metadata
             let formattingConfiguration = ModeRuntimeResolver.transcriptionFormattingConfiguration(mode: mode)
@@ -214,7 +216,8 @@ class AudioTranscriptionManager: ObservableObject {
                 do {
                     let enhancementResult = try await enhancementService.enhance(
                         text,
-                        configuration: enhancementConfiguration
+                        configuration: enhancementConfiguration,
+                        vocabulary: vocabulary
                     )
                     transcription = Transcription(
                         text: cleanedText,
@@ -224,7 +227,8 @@ class AudioTranscriptionManager: ObservableObject {
                         transcriptionModelName: currentModel.displayName,
                         aiEnhancementModelName: enhancementConfiguration.modelName
                             ?? enhancementConfiguration.provider?.defaultModel,
-                        promptName: enhancementResult.promptName,
+                        promptName: enhancementResult.promptName
+                            ?? enhancementConfiguration.prompt?.title,
                         transcriptionDuration: transcriptionDuration,
                         enhancementDuration: enhancementResult.duration,
                         aiRequestSystemMessage: enhancementResult.systemMessage,
@@ -240,7 +244,9 @@ class AudioTranscriptionManager: ObservableObject {
                         enhancedText: failureMessage,
                         audioFileURL: permanentURL.absoluteString,
                         transcriptionModelName: currentModel.displayName,
-                        promptName: nil,
+                        aiEnhancementModelName: enhancementConfiguration.modelName
+                            ?? enhancementConfiguration.provider?.defaultModel,
+                        promptName: enhancementConfiguration.prompt?.title,
                         transcriptionDuration: transcriptionDuration,
                         modeName: modeMetadata.name,
                         modeEmoji: modeMetadata.emoji

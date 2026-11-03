@@ -11,8 +11,9 @@ struct VoiceInkApp: App {
     let container: ModelContainer
 
     @StateObject private var engine: VoiceInkEngine
-    @StateObject private var whisperModelManager: WhisperModelManager
-    @StateObject private var fluidAudioModelManager: FluidAudioModelManager
+    // Retain managers without subscribing the entire scene to download progress.
+    @State private var whisperModelManager: WhisperModelManager
+    @State private var fluidAudioModelManager: FluidAudioModelManager
     @StateObject private var transcriptionModelManager: TranscriptionModelManager
     @StateObject private var recorderUIManager: RecorderUIManager
     @StateObject private var recordingShortcutManager: RecordingShortcutManager
@@ -38,6 +39,8 @@ struct VoiceInkApp: App {
     @StateObject private var prewarmService: ModelPrewarmService
 
     init() {
+        _ = LogExporter.shared
+
         // Disable HTTP response caching — prevents API responses from being stored in Cache.db
         URLCache.shared = URLCache(memoryCapacity: 0, diskCapacity: 0)
 
@@ -89,7 +92,7 @@ struct VoiceInkApp: App {
         }
 
         container = resolvedContainer
-        DictionaryService.removeExactDuplicateContent(context: resolvedContainer.mainContext, source: "launch")
+        DictionaryService.cleanUpDictionaryContent(context: resolvedContainer.mainContext, source: "launch")
 
         // Initialize services with proper sharing of instances
         let aiService = AIService()
@@ -104,12 +107,10 @@ struct VoiceInkApp: App {
 
         let enhancementService = AIEnhancementService(aiService: aiService, modelContext: resolvedContainer.mainContext)
         _enhancementService = StateObject(wrappedValue: enhancementService)
-        let autoLearnReviewer = AutoLearnAIReviewer(enhancementService: enhancementService)
         Task {
-            await AutoLearnService.shared.configure(
-                modelContainer: resolvedContainer,
-                reviewer: autoLearnReviewer
-            )
+            await AutoLearnService.shared.configure(modelContainer: resolvedContainer) { suggestions in
+                AutoLearnSuggestionController.shared.update(suggestions)
+            }
         }
 
         // 1. Create modelsDirectory URL
@@ -148,8 +149,8 @@ struct VoiceInkApp: App {
         transcriptionModelManager.refreshAllAvailableModels()
         transcriptionModelManager.loadCurrentTranscriptionModel()
 
-        _whisperModelManager = StateObject(wrappedValue: whisperModelManager)
-        _fluidAudioModelManager = StateObject(wrappedValue: fluidAudioModelManager)
+        _whisperModelManager = State(initialValue: whisperModelManager)
+        _fluidAudioModelManager = State(initialValue: fluidAudioModelManager)
         _transcriptionModelManager = StateObject(wrappedValue: transcriptionModelManager)
         _recorderUIManager = StateObject(wrappedValue: recorderUIManager)
         _engine = StateObject(wrappedValue: engine)
@@ -168,7 +169,8 @@ struct VoiceInkApp: App {
         let prewarmService = ModelPrewarmService(
             transcriptionModelManager: transcriptionModelManager,
             whisperModelManager: whisperModelManager,
-            modelContext: resolvedContainer.mainContext
+            modelContext: resolvedContainer.mainContext,
+            fluidAudioService: engine.serviceRegistry.fluidAudioTranscriptionService
         )
         _prewarmService = StateObject(wrappedValue: prewarmService)
 
@@ -306,25 +308,11 @@ struct VoiceInkApp: App {
                         .environmentObject(aiService)
                         .environmentObject(enhancementService)
                         .modelContainer(container)
-                        .lazyChangeLogPresenter { isPresenting in
-                            if isPresenting {
-                                if enableAnnouncements {
-                                    AnnouncementsService.shared.stop()
-                                }
-                            } else {
-                                if enableAnnouncements {
-                                    AnnouncementsService.shared.start()
-                                }
-                                showLaunchRemindersIfNeeded()
-                            }
-                        }
                         .onAppear {
-                            if !ChangeLogManager.needsPresentation() {
-                                if enableAnnouncements {
-                                    AnnouncementsService.shared.start()
-                                }
-                                showLaunchRemindersIfNeeded()
+                            if enableAnnouncements {
+                                AnnouncementsService.shared.start()
                             }
+                            showLaunchRemindersIfNeeded()
 
                             GitHubStarPromptCoordinator.shared.scheduleIfNeeded(modelContainer: container)
 

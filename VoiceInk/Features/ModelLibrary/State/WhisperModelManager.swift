@@ -1,7 +1,7 @@
 import Atomics
 import Foundation
 import SwiftUI
-import Zip
+import ZIPFoundation
 import os
 
 // MARK: - WhisperModelFile
@@ -99,6 +99,7 @@ class WhisperModelManager: ObservableObject {
     @Published var isModelLoaded = false
     @Published var loadedWhisperModel: WhisperModelFile?
     @Published var isModelLoading = false
+    private var activeDownloadTasks: [String: Task<Void, Never>] = [:]
 
     private var idleUnloadTask: Task<Void, Never>?
 
@@ -171,6 +172,7 @@ class WhisperModelManager: ObservableObject {
     private func downloadFileWithProgress(from url: URL, progressKey: String) async throws -> Data {
         let destinationURL = modelsDirectory.appendingPathComponent(UUID().uuidString)
         let requestState = DownloadRequestState()
+        defer { try? FileManager.default.removeItem(at: destinationURL) }
 
         return try await withTaskCancellationHandler(
             operation: {
@@ -252,9 +254,27 @@ class WhisperModelManager: ObservableObject {
         await performModelDownload(model, url)
     }
 
+    func startDownload(_ model: WhisperModel) {
+        guard activeDownloadTasks[model.name] == nil else { return }
+        downloadProgress[model.name + "_main"] = 0
+        activeDownloadTasks[model.name] = Task { [weak self] in
+            guard let self else { return }
+            await self.downloadModel(model)
+            self.activeDownloadTasks[model.name] = nil
+        }
+    }
+
+    func cancelDownload(_ model: WhisperModel) {
+        activeDownloadTasks[model.name]?.cancel()
+    }
+
     private func performModelDownload(_ model: WhisperModel, _ url: URL) async {
+        var committedMainModel: WhisperModelFile?
+
         do {
             var whisperModel = try await downloadMainModel(model, from: url)
+            committedMainModel = whisperModel
+            try Task.checkCancellation()
 
             if let coreMLZipURL = whisperModel.coreMLZipDownloadURL,
                 let coreMLURL = URL(string: coreMLZipURL)
@@ -262,6 +282,7 @@ class WhisperModelManager: ObservableObject {
                 whisperModel = try await downloadAndSetupCoreMLModel(for: whisperModel, from: coreMLURL)
             }
 
+            try Task.checkCancellation()
             availableModels.append(whisperModel)
             self.downloadProgress.removeValue(forKey: model.name + "_main")
 
@@ -270,17 +291,37 @@ class WhisperModelManager: ObservableObject {
             if shouldWarmup(model) {
                 WhisperModelWarmupCoordinator.shared.scheduleWarmup(for: model, whisperModelManager: self)
             }
+        } catch is CancellationError {
+            removePartialDownload(for: model, preserveMainModel: committedMainModel != nil)
+            if let committedMainModel,
+                !availableModels.contains(where: { $0.name == committedMainModel.name })
+            {
+                availableModels.append(committedMainModel)
+                onModelsChanged?()
+            }
+            handleModelDownloadError(model, CancellationError())
         } catch {
             handleModelDownloadError(model, error)
         }
     }
 
+    private func removePartialDownload(for model: WhisperModel, preserveMainModel: Bool) {
+        if !preserveMainModel {
+            try? FileManager.default.removeItem(at: modelsDirectory.appendingPathComponent(model.filename))
+        }
+        try? FileManager.default.removeItem(
+            at: modelsDirectory.appendingPathComponent("\(model.name)-encoder.mlmodelc.zip")
+        )
+    }
+
     private func downloadMainModel(_ model: WhisperModel, from url: URL) async throws -> WhisperModelFile {
         let progressKeyMain = model.name + "_main"
         let data = try await downloadFileWithProgress(from: url, progressKey: progressKeyMain)
+        try Task.checkCancellation()
 
         let destinationURL = modelsDirectory.appendingPathComponent(model.filename)
-        try data.write(to: destinationURL)
+        try data.write(to: destinationURL, options: .atomic)
+        try Task.checkCancellation()
 
         return WhisperModelFile(name: model.name, url: destinationURL)
     }
@@ -290,9 +331,11 @@ class WhisperModelManager: ObservableObject {
     {
         let progressKeyCoreML = model.name + "_coreml"
         let coreMLData = try await downloadFileWithProgress(from: url, progressKey: progressKeyCoreML)
+        try Task.checkCancellation()
 
         let coreMLZipPath = modelsDirectory.appendingPathComponent("\(model.name)-encoder.mlmodelc.zip")
-        try coreMLData.write(to: coreMLZipPath)
+        try coreMLData.write(to: coreMLZipPath, options: .atomic)
+        try Task.checkCancellation()
 
         return try await unzipAndSetupCoreMLModel(for: model, zipPath: coreMLZipPath, progressKey: progressKeyCoreML)
     }
@@ -300,50 +343,109 @@ class WhisperModelManager: ObservableObject {
     private func unzipAndSetupCoreMLModel(for model: WhisperModelFile, zipPath: URL, progressKey: String) async throws
         -> WhisperModelFile
     {
-        let coreMLDestination = modelsDirectory.appendingPathComponent("\(model.name)-encoder.mlmodelc")
-
-        try? FileManager.default.removeItem(at: coreMLDestination)
-        try await unzipCoreMLFile(zipPath, to: modelsDirectory)
-        return try verifyAndCleanupCoreMLFiles(model, coreMLDestination, zipPath, progressKey)
-    }
-
-    private func unzipCoreMLFile(_ zipPath: URL, to destination: URL) async throws {
-        let finished = ManagedAtomic(false)
-
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            func finishOnce(_ result: Result<Void, Error>) {
-                if finished.exchange(true, ordering: .acquiring) == false {
-                    continuation.resume(with: result)
-                }
-            }
-
-            do {
-                try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-                try Zip.unzipFile(zipPath, destination: destination, overwrite: true, password: nil)
-                finishOnce(.success(()))
-            } catch {
-                finishOnce(.failure(error))
-            }
+        defer { try? FileManager.default.removeItem(at: zipPath) }
+        let directory = modelsDirectory
+        let encoderName = "\(model.name)-encoder.mlmodelc"
+        let extraction = Task.detached(priority: .utility) {
+            try Self.extractCoreMLArchive(zipPath, encoderName: encoderName, to: directory)
         }
+        let destination = try await withTaskCancellationHandler {
+            try await extraction.value
+        } onCancel: {
+            extraction.cancel()
+        }
+
+        var installedModel = model
+        installedModel.coreMLEncoderURL = destination
+        downloadProgress.removeValue(forKey: progressKey)
+        return installedModel
     }
 
-    private func verifyAndCleanupCoreMLFiles(
-        _ model: WhisperModelFile, _ destination: URL, _ zipPath: URL, _ progressKey: String
-    ) throws -> WhisperModelFile {
-        var model = model
-
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: destination.path, isDirectory: &isDirectory), isDirectory.boolValue
-        else {
-            try? FileManager.default.removeItem(at: zipPath)
+    nonisolated private static func extractCoreMLArchive(
+        _ zipPath: URL, encoderName: String, to directory: URL,
+        maximumEntrySize: UInt64 = 8 * 1_024 * 1_024 * 1_024,
+        maximumTotalSize: UInt64 = 16 * 1_024 * 1_024 * 1_024,
+        maximumEntryCount: Int = 10_000
+    ) throws -> URL {
+        let fileManager = FileManager.default
+        guard !encoderName.contains("/"), !encoderName.contains("\\") else {
             throw VoiceInkEngineError.unzipFailed
         }
+        let staging = directory.appendingPathComponent(".coreml-" + UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(
+            at: staging, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        defer { try? fileManager.removeItem(at: staging) }
 
-        try? FileManager.default.removeItem(at: zipPath)
-        model.coreMLEncoderURL = destination
-        self.downloadProgress.removeValue(forKey: progressKey)
+        let archive = try Archive(url: zipPath, accessMode: .read)
+        var entryCount = 0
+        var declaredSize: UInt64 = 0
+        var extractedSize: UInt64 = 0
+        for entry in archive {
+            try Task.checkCancellation()
+            guard entryCount < maximumEntryCount,
+                  entry.uncompressedSize <= maximumEntrySize,
+                  entry.uncompressedSize <= maximumTotalSize - declaredSize else {
+                throw VoiceInkEngineError.unzipFailed
+            }
+            entryCount += 1
+            declaredSize += entry.uncompressedSize
 
-        return model
+            let path = entry.path
+            let destination = staging.appendingPathComponent(path)
+            // Model bundles need only regular files and directories.
+            guard entry.type != .symlink,
+                  !path.hasPrefix("/"), !path.contains("\\"), !path.utf8.contains(0),
+                  !path.split(separator: "/").contains(".."),
+                  destination.isContained(in: staging) else {
+                throw VoiceInkEngineError.unzipFailed
+            }
+            let checksum: CRC32
+            if entry.type == .directory {
+                guard entry.uncompressedSize == 0 else { throw VoiceInkEngineError.unzipFailed }
+                checksum = try archive.extract(entry, to: destination, allowUncontainedSymlinks: false)
+            } else {
+                try fileManager.createDirectory(
+                    at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+                guard !fileManager.fileExists(atPath: destination.path),
+                      fileManager.createFile(atPath: destination.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+                    throw VoiceInkEngineError.unzipFailed
+                }
+                let output = try FileHandle(forWritingTo: destination)
+                defer { try? output.close() }
+                var entrySize: UInt64 = 0
+                checksum = try archive.extract(entry) { data in
+                    try Task.checkCancellation()
+                    let size = UInt64(data.count)
+                    // Check actual output too; archive sizes can be forged.
+                    guard size <= entry.uncompressedSize - entrySize,
+                          size <= maximumEntrySize - entrySize,
+                          size <= maximumTotalSize - extractedSize else {
+                        throw VoiceInkEngineError.unzipFailed
+                    }
+                    try output.write(contentsOf: data)
+                    entrySize += size
+                    extractedSize += size
+                }
+                guard entrySize == entry.uncompressedSize else { throw VoiceInkEngineError.unzipFailed }
+            }
+            guard checksum == entry.checksum else { throw Archive.ArchiveError.invalidCRC32 }
+        }
+
+        let encoder = staging.appendingPathComponent(encoderName, isDirectory: true)
+        let contents = try encoder.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard contents.isDirectory == true, contents.isSymbolicLink != true,
+              !(try fileManager.contentsOfDirectory(atPath: encoder.path)).isEmpty else {
+            throw VoiceInkEngineError.unzipFailed
+        }
+        try Task.checkCancellation()
+
+        let destination = directory.appendingPathComponent(encoderName, isDirectory: true)
+        if fileManager.fileExists(atPath: destination.path) {
+            _ = try fileManager.replaceItemAt(destination, withItemAt: encoder)
+        } else {
+            try fileManager.moveItem(at: encoder, to: destination)
+        }
+        return destination
     }
 
     private func shouldWarmup(_ model: WhisperModel) -> Bool {
@@ -554,6 +656,5 @@ struct DownloadProgressView: View {
             .frame(height: 6)
         }
         .padding(.vertical, 4)
-        .animation(.smooth, value: totalProgress)
     }
 }

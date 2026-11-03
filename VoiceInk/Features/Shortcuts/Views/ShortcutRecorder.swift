@@ -92,15 +92,16 @@ struct ShortcutRecorder: View {
     private static let shortcutRecordingDidStart = Notification.Name("ShortcutRecorderRecordingDidStart")
 }
 
-private struct ShortcutVisualization: View {
+struct ShortcutVisualization: View {
     let shortcut: Shortcut?
     let isRecording: Bool
+    var isCompact = false
 
     var body: some View {
         HStack(spacing: 4) {
             if let shortcut {
                 ForEach(Array(shortcut.displayTokens.enumerated()), id: \.offset) { _, token in
-                    ShortcutKeyCap(title: token, isRecording: isRecording)
+                    ShortcutKeyCap(title: token, isRecording: isRecording, isCompact: isCompact)
                 }
             } else {
                 Text(isRecording ? LocalizedStringKey("Press shortcut") : LocalizedStringKey("Record"))
@@ -110,15 +111,15 @@ private struct ShortcutVisualization: View {
                     .foregroundStyle(isRecording ? .primary : .secondary)
             }
         }
-        .padding(4)
-        .frame(minWidth: shortcut == nil ? 104 : nil, minHeight: 26)
+        .padding(isCompact ? 2 : 4)
+        .frame(minWidth: shortcut == nil ? 104 : nil, minHeight: isCompact ? 20 : 26)
         .fixedSize(horizontal: true, vertical: false)
         .background {
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: isCompact ? 5 : 6)
                 .fill(isRecording ? AppTheme.Accent.fill : AppTheme.Surface.control)
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: isCompact ? 5 : 6)
                 .stroke(isRecording ? AppTheme.Accent.border : AppTheme.Border.subtle, lineWidth: 1)
         }
     }
@@ -127,21 +128,22 @@ private struct ShortcutVisualization: View {
 private struct ShortcutKeyCap: View {
     let title: String
     let isRecording: Bool
+    let isCompact: Bool
 
     var body: some View {
         Text(title)
-            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .font(.system(size: isCompact ? 9 : 11, weight: .semibold, design: .rounded))
             .lineLimit(1)
             .minimumScaleFactor(0.75)
             .foregroundStyle(foregroundColor)
-            .padding(.horizontal, 5)
-            .frame(minHeight: 18)
+            .padding(.horizontal, isCompact ? 4 : 5)
+            .frame(minHeight: isCompact ? 14 : 18)
             .background {
-                RoundedRectangle(cornerRadius: 4)
+                RoundedRectangle(cornerRadius: isCompact ? 3 : 4)
                     .fill(backgroundColor)
             }
             .overlay {
-                RoundedRectangle(cornerRadius: 4)
+                RoundedRectangle(cornerRadius: isCompact ? 3 : 4)
                     .stroke(borderColor, lineWidth: 1)
             }
     }
@@ -159,7 +161,16 @@ private struct ShortcutKeyCap: View {
     }
 }
 
+@MainActor
 final class ShortcutRecorderModel: ObservableObject {
+    private static weak var activeRecorder: ShortcutRecorderModel?
+    private static var activeRecorderID: UUID?
+
+    private let recorderID = UUID()
+    private let notificationCenter: NotificationCenter
+    private let recordingWindow: @MainActor () -> NSWindow?
+    private var focusObservers: [NSObjectProtocol] = []
+
     @Published var isRecording = false
     @Published var previewShortcut: Shortcut?
 
@@ -169,21 +180,41 @@ final class ShortcutRecorderModel: ObservableObject {
     private var pendingModifierShortcut: Shortcut?
     private var peakModifierFlags: NSEvent.ModifierFlags = []
 
-    deinit {
+    init(notificationCenter: NotificationCenter = .default,
+         recordingWindow: @escaping @MainActor () -> NSWindow? = { NSApp.keyWindow }) {
+        self.notificationCenter = notificationCenter
+        self.recordingWindow = recordingWindow
+    }
+
+    isolated deinit {
         removeRecordingMonitor()
+        resetRecordingState()
     }
 
     func start(action: ShortcutAction, onCapture: @escaping (Shortcut) -> Void) {
+        Self.activeRecorder?.cancel()
         cancel()
 
         activeAction = action
         self.onCapture = onCapture
         isRecording = true
+        Self.activeRecorder = self
+        Self.activeRecorderID = recorderID
         previewShortcut = nil
+        ShortcutDiagnostics.setCaptureAction(action)
+        ShortcutDiagnostics.notice("capture action=\(action.storageName) result=started")
         installRecordingMonitor()
+        guard localMonitor != nil else {
+            cancel()
+            return
+        }
+        observeFocusLoss()
     }
 
     func cancel() {
+        if isRecording {
+            ShortcutDiagnostics.notice("capture action=\(activeAction?.storageName ?? "unknown") result=cancelled")
+        }
         removeRecordingMonitor()
         resetRecordingState()
     }
@@ -195,12 +226,14 @@ final class ShortcutRecorderModel: ObservableObject {
         }
 
         if let validationError = ShortcutValidator.validationError(for: shortcut, action: activeAction) {
+            ShortcutDiagnostics.notice("capture action=\(activeAction.storageName) result=rejected reason=\(validationError.diagnosticReason) shortcut={\(shortcut.diagnosticDescription)}")
             cancel()
             showErrorNotification(validationError.notificationTitle(for: shortcut))
             return
         }
 
         let capture = onCapture
+        ShortcutDiagnostics.notice("capture action=\(activeAction.storageName) result=accepted shortcut={\(shortcut.diagnosticDescription)}")
         removeRecordingMonitor()
         resetRecordingState()
 
@@ -209,12 +242,41 @@ final class ShortcutRecorderModel: ObservableObject {
     }
 
     private func resetRecordingState() {
+        removeFocusObservers()
+        if Self.activeRecorderID == recorderID {
+            Self.activeRecorder = nil
+            Self.activeRecorderID = nil
+            ShortcutDiagnostics.setCaptureAction(nil)
+        }
         isRecording = false
         previewShortcut = nil
         onCapture = nil
         activeAction = nil
         pendingModifierShortcut = nil
         peakModifierFlags = []
+    }
+
+    private func observeFocusLoss() {
+        let recordingID = recorderID
+        var observations: [(Notification.Name, AnyObject?)] = [(NSApplication.didResignActiveNotification, nil)]
+        if let window = recordingWindow() {
+            observations.append((NSWindow.didResignKeyNotification, window))
+        }
+        for (name, object) in observations {
+            focusObservers.append(notificationCenter.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard Self.activeRecorderID == recordingID else { return }
+                    self?.cancel()
+                }
+            })
+        }
+    }
+
+    private func removeFocusObservers() {
+        for observer in focusObservers {
+            notificationCenter.removeObserver(observer)
+        }
+        focusObservers.removeAll()
     }
 
     private func showErrorNotification(_ title: String) {
@@ -233,6 +295,9 @@ final class ShortcutRecorderModel: ObservableObject {
             guard let self else { return event }
             let shouldConsume = self.handleRecordingEvent(event)
             return shouldConsume ? nil : event
+        }
+        if localMonitor == nil {
+            ShortcutDiagnostics.error("capture action=\(activeAction?.storageName ?? "unknown") result=monitor-install-failed")
         }
     }
 

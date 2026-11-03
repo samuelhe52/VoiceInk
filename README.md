@@ -4,7 +4,7 @@
   <p>Voice to text app for macOS to transcribe what you say to text almost instantly</p>
 
   [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-  ![Platform](https://img.shields.io/badge/platform-macOS%2014.0%2B-brightgreen)
+  ![Platform](https://img.shields.io/badge/platform-macOS%2015.0%2B-brightgreen)
   [![GitHub release (latest by date)](https://img.shields.io/github/v/release/Beingpax/VoiceInk)](https://github.com/Beingpax/VoiceInk/releases)
   ![GitHub all releases](https://img.shields.io/github/downloads/Beingpax/VoiceInk/total)
   ![GitHub stars](https://img.shields.io/github/stars/Beingpax/VoiceInk?style=social)
@@ -58,7 +58,7 @@ As an open-source project, you can build VoiceInk yourself by following the inst
 
 ## Requirements
 
-- macOS 14.4 or later
+- macOS 15.0 or later
 
 ## Documentation
 
@@ -102,7 +102,6 @@ If you encounter any issues or have questions, please:
 - [LaunchAtLogin](https://github.com/sindresorhus/LaunchAtLogin) - Launch at login functionality
 - [MediaRemoteAdapter](https://github.com/ejbills/mediaremote-adapter) - Media playback control during recording
 - [Zip](https://github.com/marmelroy/Zip) - File compression and decompression utilities
-- [SelectedTextKit](https://github.com/tisfeng/SelectedTextKit) - A modern macOS library for getting selected text
 - [Swift Atomics](https://github.com/apple/swift-atomics) - Low-level atomic operations for thread-safe concurrent programming
 
 

@@ -88,7 +88,7 @@ class TranscriptionModelManager: ObservableObject {
 
     func loadCurrentTranscriptionModel() {
         if let savedModelName = UserDefaults.standard.string(forKey: "CurrentTranscriptionModel"),
-            let savedModel = allAvailableModels.first(where: { $0.name == savedModelName })
+            let savedModel = TranscriptionModelRegistry.model(forSelectionKey: savedModelName, in: allAvailableModels)
         {
             guard isAvailableOnCurrentOS(savedModel) else {
                 UserDefaults.standard.removeObject(forKey: "CurrentTranscriptionModel")
@@ -116,7 +116,7 @@ class TranscriptionModelManager: ObservableObject {
         }
 
         self.currentTranscriptionModel = model
-        UserDefaults.standard.set(model.name, forKey: "CurrentTranscriptionModel")
+        UserDefaults.standard.set(model.selectionKey, forKey: "CurrentTranscriptionModel")
         ensureSelectedLanguageIsSupported(by: model)
 
         if model.provider != .whisper {
@@ -141,7 +141,8 @@ class TranscriptionModelManager: ObservableObject {
     // MARK: - Refresh all available models
 
     func refreshAllAvailableModels() {
-        let currentModelName = currentTranscriptionModel?.name
+        let currentSelection = currentTranscriptionModel?.selectionKey
+            ?? UserDefaults.standard.string(forKey: "CurrentTranscriptionModel")
         var models = TranscriptionModelRegistry.models
 
         for whisperModel in whisperModelManager?.availableModels ?? [] {
@@ -153,10 +154,26 @@ class TranscriptionModelManager: ObservableObject {
 
         allAvailableModels = models
 
-        if let currentName = currentModelName,
-            let updatedModel = allAvailableModels.first(where: { $0.name == currentName })
+        if let currentSelection,
+            let updatedModel = TranscriptionModelRegistry.model(forSelectionKey: currentSelection, in: allAvailableModels)
         {
-            setDefaultTranscriptionModel(updatedModel)
+            if isAvailableOnCurrentOS(updatedModel) {
+                setDefaultTranscriptionModel(updatedModel)
+            } else {
+                currentTranscriptionModel = nil
+                UserDefaults.standard.removeObject(forKey: "CurrentTranscriptionModel")
+            }
+        } else {
+            currentTranscriptionModel = nil
+        }
+    }
+
+    func refreshOpenRouterCatalog() async {
+        do {
+            try await OpenRouterTranscriptionCatalog.refresh()
+            refreshAllAvailableModels()
+        } catch {
+            logger.error("Failed to refresh OpenRouter transcription models: \(error.localizedDescription, privacy: .public)")
         }
     }
 

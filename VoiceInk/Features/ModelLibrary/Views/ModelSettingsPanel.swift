@@ -274,7 +274,7 @@ private struct TranscriptionPromptSettingsSection: View {
 }
 
 private struct EnhancementModelSettingsView: View {
-    @AppStorage("SkipShortEnhancement") private var isSkipShortEnhancementEnabled = true
+    @AppStorage("SkipShortEnhancement") private var isSkipShortEnhancementEnabled = false
     @AppStorage("ShortEnhancementWordThreshold") private var shortEnhancementWordThreshold = 3
     @AppStorage(EnhancementRequestSettings.timeoutKey) private var enhancementTimeoutSeconds =
         EnhancementRequestSettings.defaultTimeoutSeconds
@@ -399,7 +399,7 @@ private struct AdvancedModelSettingsSection: View {
                 HStack(spacing: 4) {
                     Text("Timeout")
                     InfoTip(
-                        "Set how long to wait for batch cloud transcription to finish. This does not affect local or realtime transcription."
+                        LocalizedStringKey("Set how long to wait for batch cloud transcription to finish. This does not affect local or realtime transcription.")
                     )
                 }
             }

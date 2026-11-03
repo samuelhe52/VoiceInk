@@ -61,9 +61,11 @@ class AudioTranscriptionService: ObservableObject {
                 for: model,
                 realtimeEnabled: mode?.isRealtimeTranscriptionEnabled
             )
+            let vocabulary = CustomVocabularyService.shared.loadSavedVocabulary(from: modelContext)
             let requestContext = TranscriptionRequestContext(
                 language: language,
-                prompt: model.provider.supportsTranscriptionPrompt ? WhisperPrompt.resolvedPrompt(for: language) : nil
+                prompt: model.provider.supportsTranscriptionPrompt ? WhisperPrompt.resolvedPrompt(for: language) : nil,
+                vocabulary: vocabulary
             )
             let modeName = (mode?.isEnabled == true) ? mode?.name : nil
             let modeEmoji = (mode?.isEnabled == true) ? mode?.icon.value : nil
@@ -71,8 +73,9 @@ class AudioTranscriptionService: ObservableObject {
             let transcriptionStart = Date()
             var text = try await serviceRegistry.transcribe(audioURL: url, model: model, context: requestContext)
             let transcriptionDuration = Date().timeIntervalSince(transcriptionStart)
-            text = TranscriptionOutputFilter.filter(text)
+            text = TranscriptionOutputFilter.filter(text, language: language)
             text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            text = try await vocabulary.correctTranscription(text)
             let formattingConfiguration = ModeRuntimeResolver.transcriptionFormattingConfiguration(mode: mode)
 
             if formattingConfiguration.isTextFormattingEnabled {
@@ -125,7 +128,8 @@ class AudioTranscriptionService: ObservableObject {
                 do {
                     let enhancementResult = try await enhancementService.enhance(
                         text,
-                        configuration: enhancementConfiguration
+                        configuration: enhancementConfiguration,
+                        vocabulary: vocabulary
                     )
                     let newTranscription = Transcription(
                         text: originalText,
@@ -135,7 +139,8 @@ class AudioTranscriptionService: ObservableObject {
                         transcriptionModelName: model.displayName,
                         aiEnhancementModelName: enhancementConfiguration.modelName
                             ?? enhancementConfiguration.provider?.defaultModel,
-                        promptName: enhancementResult.promptName,
+                        promptName: enhancementResult.promptName
+                            ?? enhancementConfiguration.prompt?.title,
                         transcriptionDuration: transcriptionDuration,
                         enhancementDuration: enhancementResult.duration,
                         aiRequestSystemMessage: enhancementResult.systemMessage,
@@ -168,7 +173,9 @@ class AudioTranscriptionService: ObservableObject {
                         enhancedText: failureMessage,
                         audioFileURL: permanentURLString,
                         transcriptionModelName: model.displayName,
-                        promptName: nil,
+                        aiEnhancementModelName: enhancementConfiguration.modelName
+                            ?? enhancementConfiguration.provider?.defaultModel,
+                        promptName: enhancementConfiguration.prompt?.title,
                         transcriptionDuration: transcriptionDuration,
                         modeName: modeName,
                         modeEmoji: modeEmoji

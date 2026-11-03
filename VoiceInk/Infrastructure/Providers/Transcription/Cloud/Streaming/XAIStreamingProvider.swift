@@ -7,10 +7,12 @@ final class XAIStreamingProvider: StreamingTranscriptionProvider {
     private let client = LLMkit.XAIStreamingClient()
     private var eventsContinuation: AsyncStream<StreamingTranscriptionEvent>.Continuation?
     private var forwardingTask: Task<Void, Never>?
+    private let customVocabulary: [String]
 
     private(set) var transcriptionEvents: AsyncStream<StreamingTranscriptionEvent>
 
-    init() {
+    init(customVocabulary: [String]) {
+        self.customVocabulary = customVocabulary
         var continuation: AsyncStream<StreamingTranscriptionEvent>.Continuation!
         transcriptionEvents = AsyncStream { continuation = $0 }
         eventsContinuation = continuation
@@ -30,7 +32,12 @@ final class XAIStreamingProvider: StreamingTranscriptionProvider {
         startEventForwarding()
 
         do {
-            try await client.connect(apiKey: apiKey, model: model.name, language: language)
+            try await client.connect(
+                apiKey: apiKey,
+                model: model.name,
+                language: language,
+                customVocabulary: customVocabulary
+            )
         } catch {
             forwardingTask?.cancel()
             forwardingTask = nil

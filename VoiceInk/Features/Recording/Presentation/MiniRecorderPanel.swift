@@ -1,17 +1,15 @@
 import AppKit
-import SwiftUI
 import os
 
-class MiniRecorderPanel: NSPanel {
+final class MiniRecorderPanel: NSPanel {
     override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
 
     private let logger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "MiniRecorderPanel")
 
     init(contentRect: NSRect) {
         super.init(
             contentRect: contentRect,
-            styleMask: [.nonactivatingPanel, .fullSizeContentView],
+            styleMask: [.nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -25,36 +23,33 @@ class MiniRecorderPanel: NSPanel {
         hidesOnDeactivate = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         isMovable = true
-        isMovableByWindowBackground = true
+        isMovableByWindowBackground = false
         backgroundColor = .clear
         isOpaque = false
         hasShadow = false
-        titlebarAppearsTransparent = true
-        titleVisibility = .hidden
-        standardWindowButton(.closeButton)?.isHidden = true
     }
 
     /// Returns `nil` when there is no screen at all, so callers can skip showing the panel
     /// instead of placing it at the global origin.
-    static func calculateWindowMetrics() -> NSRect? {
-        let width: CGFloat = 540
-        let height: CGFloat = 430
-
-        guard let screen = RecorderScreenResolver.resolve() else { return nil }
+    static func calculateWindowMetrics(
+        size: NSSize = NSSize(width: 540, height: 430),
+        screen: NSScreen? = nil
+    ) -> NSRect? {
+        guard let screen = screen ?? RecorderScreenResolver.resolve() else { return nil }
 
         // Host stays large enough for assistant output; SwiftUI controls the visible mini width.
         let padding: CGFloat = 24
 
         let visibleFrame = screen.visibleFrame
         let centerX = visibleFrame.midX
-        let xPosition = centerX - (width / 2)
+        let xPosition = centerX - (size.width / 2)
         let yPosition = visibleFrame.minY + padding
 
         return NSRect(
             x: xPosition,
             y: yPosition,
-            width: width,
-            height: height
+            width: size.width,
+            height: size.height
         )
     }
 
